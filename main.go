@@ -25,6 +25,7 @@ var options = struct {
 	CloudflareProxy    string
 	CloudflareTTL      string
 	DNSName            string
+	DNSRoots           string
 	UseInternalIP      bool
 	SkipExternalIP     bool
 	NodeSelector       string
@@ -35,13 +36,15 @@ var options = struct {
 	CloudflareProxy:    os.Getenv("CF_PROXY"),
 	CloudflareTTL:      os.Getenv("CF_TTL"),
 	DNSName:            os.Getenv("DNS_NAME"),
+	DNSRoots:           os.Getenv("DNS_ROOTS"),
 	UseInternalIP:      os.Getenv("USE_INTERNAL_IP") != "",
 	SkipExternalIP:     os.Getenv("SKIP_EXTERNAL_IP") != "",
 	NodeSelector:       os.Getenv("NODE_SELECTOR"),
 }
 
 func main() {
-	flag.StringVar(&options.DNSName, "dns-name", options.DNSName, "the dns name for the nodes, comma-separated for multiple (same root)")
+	flag.StringVar(&options.DNSRoots, "dns-roots", options.DNSRoots, "the dns root domain, comma-seperated for multiple")
+	flag.StringVar(&options.DNSName, "dns-name", options.DNSName, "the FQDN name for the nodes, comma-separated for multiple. Needs to be within one of the roots in DNSRoots")
 	flag.StringVar(&options.CloudflareAPIEmail, "cloudflare-api-email", options.CloudflareAPIEmail, "the email address to use for cloudflare")
 	flag.StringVar(&options.CloudflareAPIKey, "cloudflare-api-key", options.CloudflareAPIKey, "the key to use for cloudflare")
 	flag.StringVar(&options.CloudflareAPIToken, "cloudflare-api-token", options.CloudflareAPIToken, "the token to use for cloudflare")
@@ -62,6 +65,12 @@ func main() {
 	if len(dnsNames) == 1 && dnsNames[0] == "" {
 		flag.Usage()
 		log.Fatalln("dns name is required")
+	}
+
+	dnsRoots := strings.Split(options.DNSRoots, ",")
+	if len(dnsRoots) == 1 && dnsRoots[0] == "" {
+		flag.Usage()
+		log.Fatalln("dns root is required")
 	}
 
 	cloudflareProxy, err := strconv.ParseBool(options.CloudflareProxy)
@@ -143,7 +152,7 @@ func main() {
 		}
 		lastIPs = ips
 
-		err = sync(context.Background(), ips, dnsNames, cloudflareTTL, cloudflareProxy)
+		err = sync(context.Background(), ips, dnsNames, dnsRoots, cloudflareTTL, cloudflareProxy)
 		if err != nil {
 			log.Println("failed to sync", err)
 		}

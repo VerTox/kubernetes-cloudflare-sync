@@ -9,89 +9,99 @@ import (
 	"github.com/pkg/errors"
 )
 
-func sync(ctx context.Context, ips []string, dnsNames []string, cloudflareTTL int, cloudflareProxy bool) error {
+func sync(ctx context.Context, ips []string, dnsNames []string, dnsRoots []string, cloudflareTTL int, cloudflareProxy bool) error {
 	api, err := newCloudflareClient(options.CloudflareAPIToken, options.CloudflareAPIEmail, options.CloudflareAPIKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to access cloudflare api")
 	}
 
-	root := dnsNames[0]
-	zoneID, err := findZoneID(ctx, api, root)
-	if err != nil {
-		return errors.Wrapf(err, "failed to find zone id for dns-name:=%s",
-			root)
-	}
+	for _, dnsRoot := range dnsRoots {
 
-	known := map[string]bool{}
-	for _, ip := range ips {
-		known[ip] = true
-	}
-
-	for _, dnsName := range dnsNames {
-		records, err := api.DNSRecords(ctx, zoneID, cloudflare.DNSRecord{Type: "A", Name: dnsName})
+		root := dnsRoot
+		zoneID, err := findZoneID(ctx, api, root)
 		if err != nil {
-			return errors.Wrapf(err, "failed to list dns records for zone-id=%s name=%s",
-				zoneID, dnsName)
+			return errors.Wrapf(err, "failed to find zone id for dns-root:=%s",
+				root)
 		}
 
-		seen := map[string]bool{}
+		known := map[string]bool{}
+		for _, ip := range ips {
+			known[ip] = true
+		}
 
-		for _, record := range records {
-			log.Printf("found existing record name=%s ip=%s\n",
-				record.Name, record.Content)
-			if _, ok := known[record.Content]; ok {
-				seen[record.Content] = true
+		for _, dnsName := range dnsNames {
+			//check if dnsName is part of root
+			//skip if not
+			if !(strings.HasSuffix(dnsName, root)) {
+				continue
+			}
 
-				isProxied := false
-				if record.Proxied != nil && *record.Proxied {
-					isProxied = true
-				}
+			records, err := api.DNSRecords(ctx, zoneID, cloudflare.DNSRecord{Type: "A", Name: dnsName})
+			if err != nil {
+				return errors.Wrapf(err, "failed to list dns records for zone-id=%s name=%s",
+					zoneID, dnsName)
+			}
 
-				if isProxied != cloudflareProxy || record.TTL != cloudflareTTL {
-					log.Printf("updating dns record name=%s ip=%s\n",
+			seen := map[string]bool{}
+
+			for _, record := range records {
+				log.Printf("found existing record name=%s ip=%s\n",
+					record.Name, record.Content)
+				if _, ok := known[record.Content]; ok {
+					seen[record.Content] = true
+
+					isProxied := false
+					if record.Proxied != nil && *record.Proxied {
+						isProxied = true
+					}
+
+					if isProxied != cloudflareProxy || record.TTL != cloudflareTTL {
+						log.Printf("updating dns record name=%s ip=%s\n",
+							record.Name, record.Content)
+						err := api.UpdateDNSRecord(ctx, zoneID, record.ID, cloudflare.DNSRecord{
+							Type:    record.Type,
+							Name:    record.Name,
+							Content: record.Content,
+							TTL:     cloudflareTTL,
+							Proxied: &cloudflareProxy,
+						})
+						if err != nil {
+							return errors.Wrapf(err, "failed to update dns record zone-id=%s record-id=%s name=%s ip=%s",
+								zoneID, record.ID, record.Name, record.Content)
+						}
+					}
+				} else {
+					log.Printf("removing dns record name=%s ip=%s\n",
 						record.Name, record.Content)
-					err := api.UpdateDNSRecord(ctx, zoneID, record.ID, cloudflare.DNSRecord{
-						Type:    record.Type,
-						Name:    record.Name,
-						Content: record.Content,
-						TTL:     cloudflareTTL,
-						Proxied: &cloudflareProxy,
-					})
+					err := api.DeleteDNSRecord(ctx, zoneID, record.ID)
 					if err != nil {
-						return errors.Wrapf(err, "failed to update dns record zone-id=%s record-id=%s name=%s ip=%s",
+						return errors.Wrapf(err, "failed to delete dns record zone-id=%s record-id=%s name=%s ip=%s",
 							zoneID, record.ID, record.Name, record.Content)
 					}
 				}
-			} else {
-				log.Printf("removing dns record name=%s ip=%s\n",
-					record.Name, record.Content)
-				err := api.DeleteDNSRecord(ctx, zoneID, record.ID)
+			}
+
+			for ip := range known {
+				if _, ok := seen[ip]; ok {
+					continue
+				}
+				log.Printf("adding dns record name=%s ip=%s\n",
+					dnsName, ip)
+				_, err := api.CreateDNSRecord(ctx, zoneID, cloudflare.DNSRecord{
+					Type:    "A",
+					Name:    dnsName,
+					Content: ip,
+					TTL:     cloudflareTTL,
+					Proxied: &cloudflareProxy,
+				})
 				if err != nil {
-					return errors.Wrapf(err, "failed to delete dns record zone-id=%s record-id=%s name=%s ip=%s",
-						zoneID, record.ID, record.Name, record.Content)
+					return errors.Wrapf(err, "failed to create dns record zone-id=%s name=%s ip=%s",
+						zoneID, dnsName, ip)
 				}
 			}
 		}
 
-		for ip := range known {
-			if _, ok := seen[ip]; ok {
-				continue
-			}
-			log.Printf("adding dns record name=%s ip=%s\n",
-				dnsName, ip)
-			_, err := api.CreateDNSRecord(ctx, zoneID, cloudflare.DNSRecord{
-				Type:    "A",
-				Name:    dnsName,
-				Content: ip,
-				TTL:     cloudflareTTL,
-				Proxied: &cloudflareProxy,
-			})
-			if err != nil {
-				return errors.Wrapf(err, "failed to create dns record zone-id=%s name=%s ip=%s",
-					zoneID, dnsName, ip)
-			}
-		}
-	}
+	} 
 
 	return nil
 }
