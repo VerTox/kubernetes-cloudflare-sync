@@ -16,3 +16,4 @@ jobs:
           registry: "docker.io"
           dockerhub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
           dockerhub_password: ${{ secrets.DOCKER_HUB_TOKEN }}
+          registry-username: ${{ secrets.DOCKER_HUB_USERNAME }}
